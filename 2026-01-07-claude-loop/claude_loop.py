@@ -3,12 +3,13 @@
 Claude Loop Script - Runs Claude CLI in a loop to process PRD phases.
 
 Usage:
-    python claude_loop.py <iterations> <prd_file> <prompt_file>
+    python claude_loop.py <iterations> <prd_file> <prompt_file> <progress_file>
 
 Arguments:
-    iterations  - Maximum number of iterations to run
-    prd_file    - Path to PRD.jsonc or PRD.json file
-    prompt_file - Path to PROMPT.md file
+    iterations    - Maximum number of iterations to run
+    prd_file      - Path to PRD.jsonc or PRD.json file
+    prompt_file   - Path to PROMPT.md file
+    progress_file - Path to PROGRESS.md file (created if missing, errors if non-empty)
 """
 
 import argparse
@@ -38,6 +39,11 @@ def parse_args() -> argparse.Namespace:
         "prompt",
         type=Path,
         help="Path to PROMPT.md file",
+    )
+    parser.add_argument(
+        "progress",
+        type=Path,
+        help="Path to PROGRESS.md file (created if missing, errors if non-empty)",
     )
     return parser.parse_args()
 
@@ -239,6 +245,18 @@ def main() -> int:
     if args.iterations < 1:
         print("Error: Iterations must be at least 1", file=sys.stderr)
         return 1
+
+    # Handle progress file: create if missing, error if non-empty
+    if args.progress.exists():
+        if args.progress.stat().st_size > 0:
+            print(
+                f"Error: Progress file already exists and is not empty: {args.progress}",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        args.progress.touch()
+        print(f"Created progress file: {args.progress}")
 
     # Log file in the same directory as the prompt file
     log_file = args.prompt.parent / "claude.log"
