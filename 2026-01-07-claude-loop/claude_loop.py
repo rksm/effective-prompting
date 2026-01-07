@@ -14,11 +14,24 @@ Arguments:
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# ANSI color codes for terminal output
+BOLD = "\033[1m"
+CYAN = "\033[36m"
+YELLOW = "\033[33m"
+GREEN = "\033[32m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+# Disable colors if not a TTY or NO_COLOR is set
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    BOLD = CYAN = YELLOW = GREEN = DIM = RESET = ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,16 +100,26 @@ def format_tool_use(tool_name: str, tool_input: dict) -> str:
 
     detail_str = ", ".join(details) if details else ""
     if detail_str:
-        return f"[Tool: {tool_name}] {detail_str}"
-    return f"[Tool: {tool_name}]"
+        return f"{DIM}[Tool: {tool_name}] {detail_str}{RESET}"
+    return f"{DIM}[Tool: {tool_name}]{RESET}"
 
 
 def format_tool_result(content: str) -> str:
     """Format tool result for human-readable output."""
     # Truncate long results
     if len(content) > 200:
-        return f"[Result: {content[:197]}...]"
-    return f"[Result: {content}]"
+        return f"{DIM}[Result: {content[:197]}...]{RESET}"
+    return f"{DIM}[Result: {content}]{RESET}"
+
+
+def format_assistant_text(text: str) -> str:
+    """Format assistant text for highlighted output."""
+    return f"{BOLD}{CYAN}{text}{RESET}"
+
+
+def format_thinking(text: str) -> str:
+    """Format thinking/reasoning blocks."""
+    return f"{YELLOW}[Thinking] {text}{RESET}"
 
 
 def process_json_line(line: str) -> str | None:
@@ -117,7 +140,7 @@ def process_json_line(line: str) -> str | None:
         if subtype == "init":
             model = data.get("model", "unknown")
             session_id = data.get("session_id", "")[:8]
-            return f"[System] Session started (model: {model}, session: {session_id}...)"
+            return f"{DIM}[System] Session started (model: {model}, session: {session_id}...){RESET}"
         return None
 
     elif msg_type == "assistant":
@@ -126,11 +149,16 @@ def process_json_line(line: str) -> str | None:
 
         output_parts = []
         for item in content:
-            if item.get("type") == "text":
+            item_type = item.get("type")
+            if item_type == "text":
                 text = item.get("text", "")
                 if text.strip():
-                    output_parts.append(text)
-            elif item.get("type") == "tool_use":
+                    output_parts.append(format_assistant_text(text))
+            elif item_type == "thinking":
+                text = item.get("thinking", "")
+                if text.strip():
+                    output_parts.append(format_thinking(text))
+            elif item_type == "tool_use":
                 tool_name = item.get("name", "unknown")
                 tool_input = item.get("input", {})
                 output_parts.append(format_tool_use(tool_name, tool_input))
@@ -158,9 +186,9 @@ def process_json_line(line: str) -> str | None:
         cost = data.get("total_cost_usd", 0)
 
         if subtype == "success":
-            return f"[Result] Completed in {duration_s:.1f}s (cost: ${cost:.4f})"
+            return f"{GREEN}[Result] Completed in {duration_s:.1f}s (cost: ${cost:.4f}){RESET}"
         else:
-            return f"[Result] {subtype} in {duration_s:.1f}s (cost: ${cost:.4f})"
+            return f"{GREEN}[Result] {subtype} in {duration_s:.1f}s (cost: ${cost:.4f}){RESET}"
 
     return None
 
