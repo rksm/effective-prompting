@@ -99,10 +99,8 @@ If while implementing the steps you run into an issue you cannot resolve or find
 - What the outcome should be, high-level
 
 ## Workflow expectations
-- Follow the phase tasks exactly; do not implement future phases early.
-- For git history moves, use `git filter-repo` on a fresh clone as described in the plan.
-- Avoid destructive operations on the source repo; use the filtered clone for history extraction.
-- Update paths in config files only as required by the new root layout.
+- Follow the phase steps exactly; do not implement future phases early.
+- ...
 
 ## Tests and validation
 - Prefer the phase's listed commands/tests.
