@@ -278,10 +278,11 @@ def main() -> int:
     if args.progress.exists():
         if args.progress.stat().st_size > 0:
             print(
-                f"Error: Progress file already exists and is not empty: {args.progress}",
+                f"WARNING: Progress file already exists and is not empty: {args.progress}",
                 file=sys.stderr,
             )
-            return 1
+            # sleep for a while to give the user a chance to interact
+            input("Press Enter to continue or Ctrl+C to exit...")
     else:
         args.progress.touch()
         print(f"Created progress file: {args.progress}")

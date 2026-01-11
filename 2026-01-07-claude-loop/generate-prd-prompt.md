@@ -138,6 +138,7 @@ If while implementing the steps you run into an issue you cannot resolve or find
   - `PROMPT.md`
 - Use concrete, actionable tasks. Avoid vague verbs.
 - Ensure the PRD's `steps` are ordered, status values are valid, and validations are realistic.
+- Keep steps small and simple. Err on the side of more steps if needed.
 - Keep the PROMPT's "Task" section aligned with the PRD (phase-by-phase execution).
 
 ## Narrative
