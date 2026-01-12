@@ -89,7 +89,7 @@ Schema notes: top-level `status` and per-step `status` must be one of `planned`,
 - Append progress notes to `PROGRESS.md` (include what was done, what remains, any blockers, and any additional observations that might be important for follow up work).
 - Commit all changes with a concise conventional-commit style message.
 
-If while implementing the steps you find that the prd is complete, output <CLAUDE>DONE</CLAUDE>.
+If while implementing the steps you find that the prd is complete, output <CLAUDE>DONE</CLAUDE>. NEVER output DONE when there are phases with status "planned" remaining!
 
 If while implementing the steps you run into an issue you cannot resolve or find conceptual problems with the plan, output <CLAUDE>BLOCKED: [explanation]</CLAUDE>.
 
