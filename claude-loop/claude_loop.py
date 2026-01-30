@@ -258,6 +258,72 @@ def check_output(output: str) -> tuple[str, str | None]:
     return "continue", None
 
 
+def verify_done(prd_path: Path) -> tuple[bool, str]:
+    """
+    Use Claude Sonnet to verify that the PRD actually indicates all steps are done.
+    Returns (is_verified, explanation).
+    """
+    verification_prompt = f"""You are a verification agent. Your ONLY job is to check if a PRD file indicates that ALL work is complete.
+
+Read the PRD file at: {prd_path}
+
+Check the following:
+1. Read the PRD file content
+2. Check if ALL steps have "status": "done"
+3. Verify there are NO steps with "status": "planned" or "status": "in-progress"
+
+IMPORTANT: Be strict. If even ONE step is not "done", the work is NOT complete.
+
+Output EXACTLY one of these two responses:
+- If ALL steps are "done": <VERIFIED>YES</VERIFIED>
+- If ANY step is NOT "done": <VERIFIED>NO: [list the steps that are not done]</VERIFIED>
+
+Do not output anything else. Just read the file and verify."""
+
+    cmd = [
+        "claude",
+        "--model",
+        "sonnet",
+        "-p",
+        verification_prompt,
+    ]
+
+    print(f"\n{YELLOW}[Verification] Checking if PRD indicates all steps are done...{RESET}")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        output = result.stdout + result.stderr
+
+        # Check for verification result
+        verified_yes = re.search(r"<VERIFIED>YES</VERIFIED>", output)
+        if verified_yes:
+            print(f"{GREEN}[Verification] Confirmed: All steps are done{RESET}")
+            return True, "All steps verified as done"
+
+        verified_no = re.search(r"<VERIFIED>NO:\s*(.+?)</VERIFIED>", output, re.DOTALL)
+        if verified_no:
+            reason = verified_no.group(1).strip()
+            print(f"{YELLOW}[Verification] Failed: {reason}{RESET}")
+            return False, reason
+
+        # If no clear verification tag, assume verification failed
+        print(f"{YELLOW}[Verification] Unclear response, assuming not done{RESET}")
+        return False, "Verification response unclear"
+
+    except subprocess.TimeoutExpired:
+        print(f"{YELLOW}[Verification] Timeout, assuming not done{RESET}")
+        return False, "Verification timed out"
+    except Exception as e:
+        print(f"{YELLOW}[Verification] Error: {e}, assuming not done{RESET}")
+        return False, f"Verification error: {e}"
+
+
 def main() -> int:
     args = parse_args()
 
@@ -304,10 +370,17 @@ def main() -> int:
         status, explanation = check_output(output)
 
         if status == "done":
-            print("\n" + "=" * 60)
-            print("SUCCESS: All phases completed")
-            print("=" * 60)
-            return 0
+            # Verify with a separate Claude instance that the PRD actually shows completion
+            verified, verify_reason = verify_done(args.prd)
+            if verified:
+                print("\n" + "=" * 60)
+                print("SUCCESS: All phases completed (verified)")
+                print("=" * 60)
+                return 0
+            else:
+                print(f"\n{YELLOW}[Warning] Claude claimed DONE but verification failed: {verify_reason}{RESET}")
+                print(f"{YELLOW}[Warning] Continuing loop...{RESET}")
+                # Continue the loop instead of accepting the false DONE
 
         if status == "blocked":
             print("\n" + "=" * 60)
