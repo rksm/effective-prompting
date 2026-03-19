@@ -83,7 +83,7 @@ Schema notes: top-level `status` and per-step `status` must be one of `planned`,
 
 ## Task
 - Find the first phase with "status": "planned".
-- Implement all tasks for that phase according to "tasks". Follow those tasks precisely.
+- Implement all tasks for that phase according to "tasks". Use a test-first (TDD) approach. Follow the task instructions precisely.
 - Run the phase's listed validation instructions and any lightweight `global_validation` checks that make sense at this point.
 - Update the phase status to "done" once complete.
 - Append progress notes to `ai/PROGRESS.md` (include what was done, what remains, any blockers, and any additional observations that might be important for follow up work).
@@ -103,6 +103,7 @@ If while implementing the steps you run into an issue you cannot resolve or find
 - ...
 
 ## Tests and validation
+- Use TDD but avoid writing trivial tests.
 - Prefer the phase's listed commands/tests.
 - If a test can't be run, explain why and provide manual verification steps.
 - Keep tests lightweight and scoped to the current phase.
