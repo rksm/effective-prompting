@@ -87,7 +87,7 @@ Schema notes: top-level `status` and per-step `status` must be one of `planned`,
 - Run the phase's listed validation instructions and any lightweight `global_validation` checks that make sense at this point.
 - Update the phase status to "done" once complete.
 - Append progress notes to `ai/PROGRESS.md` (include what was done, what remains, any blockers, and any additional observations that might be important for follow up work).
-- Commit all changes with a concise conventional-commit style message.
+- Commit all changes with a concise conventional-commit style message. Include changes to `ai/PROGRESS.md` and `ai/PRD.jsonc`.
 
 If while implementing the steps you find that the prd is complete, output <CLAUDE>DONE</CLAUDE>. NEVER output DONE when there are phases with status "planned" remaining!
 
