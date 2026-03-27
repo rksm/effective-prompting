@@ -14,6 +14,7 @@ import struct
 import termios
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import fcntl
@@ -30,6 +31,14 @@ LIMIT_LINE_NO_RESET_RE = re.compile(
 )
 HEADING_RE = re.compile(r"^(?P<scope>.*\S)\s+limit:\s*$")
 KEY_VALUE_RE = re.compile(r"^(?P<key>[A-Za-z][A-Za-z0-9 \._/-]*):\s*(?P<value>.+)$")
+
+DEFAULT_CODEX_CONFIG_OVERRIDES = (
+    "mcp_servers.chrome-devtools.enabled=false",
+)
+TERMINAL_QUERY_DEVICE_ATTRIBUTES = b"\x1b[c"
+TERMINAL_QUERY_FOREGROUND_COLOR = b"\x1b]10;?\x1b\\"
+TERMINAL_REPLY_DEVICE_ATTRIBUTES = b"\x1b[?1;2c"
+TERMINAL_REPLY_FOREGROUND_COLOR = b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"
 
 
 @dataclass
@@ -62,9 +71,16 @@ def read_chunk(fd: int, deadline: float, *, pause: float = 0.05) -> bytes:
     try:
         return os.read(fd, 65536)
     except OSError as exc:
-        if exc.errno in {6, 9, 11}:
+        if exc.errno in {5, 6, 9, 11}:
             return b""
         raise
+
+
+def reply_to_terminal_queries(fd: int, chunk: bytes) -> None:
+    if TERMINAL_QUERY_DEVICE_ATTRIBUTES in chunk:
+        os.write(fd, TERMINAL_REPLY_DEVICE_ATTRIBUTES)
+    if TERMINAL_QUERY_FOREGROUND_COLOR in chunk:
+        os.write(fd, TERMINAL_REPLY_FOREGROUND_COLOR)
 
 
 def parse_chunk(chunk: str, scope: str) -> list[LimitRecord]:
@@ -95,11 +111,25 @@ def parse_chunk(chunk: str, scope: str) -> list[LimitRecord]:
     return found
 
 
-def capture_status(codex_cmd: str, init_seconds: float, status_wait_seconds: float) -> str:
+def build_codex_argv(codex_cmd: str) -> list[str]:
+    argv = [codex_cmd]
+    for override in DEFAULT_CODEX_CONFIG_OVERRIDES:
+        argv.extend(["-c", override])
+    return argv
+
+
+def capture_status(
+    codex_cmd: str,
+    init_seconds: float,
+    status_wait_seconds: float,
+    codex_home: Optional[str] = None,
+) -> str:
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
-        os.execvp(codex_cmd, [codex_cmd])
+        if codex_home is not None:
+            os.environ["CODEX_HOME"] = codex_home
+        os.execvp(codex_cmd, build_codex_argv(codex_cmd))
 
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
 
@@ -107,54 +137,63 @@ def capture_status(codex_cmd: str, init_seconds: float, status_wait_seconds: flo
     current_scope = "global"
     status_found = False
 
-    # Initialize session.
     bootstrap_deadline = dt.datetime.now().timestamp() + init_seconds
     while dt.datetime.now().timestamp() < bootstrap_deadline:
         chunk = read_chunk(fd, bootstrap_deadline)
-        if chunk:
-            out.extend(chunk)
-
-    # Ask for the status card.
-    os.write(fd, b"/status\r\n")
-
-    status_deadline = dt.datetime.now().timestamp() + status_wait_seconds
-    while dt.datetime.now().timestamp() < status_deadline:
-        chunk = read_chunk(fd, status_deadline)
         if not chunk:
             continue
-
-        text = strip_ansi(chunk.decode("utf-8", errors="replace"))
+        reply_to_terminal_queries(fd, chunk)
         out.extend(chunk)
 
-        for raw_line in text.splitlines():
-            line = clean_line(raw_line)
-            if not line:
+    for attempt in range(2):
+        os.write(fd, b"/status\r\n")
+
+        status_deadline = dt.datetime.now().timestamp() + status_wait_seconds
+        while dt.datetime.now().timestamp() < status_deadline:
+            chunk = read_chunk(fd, status_deadline)
+            if not chunk:
                 continue
 
-            if "Try new model" in line:
-                # Use the existing model and re-run /status.
-                os.write(fd, b"2\r\n")
-                os.write(fd, b"/status\r\n")
-                status_deadline = dt.datetime.now().timestamp() + status_wait_seconds
+            reply_to_terminal_queries(fd, chunk)
+            out.extend(chunk)
+            text = strip_ansi(chunk.decode("utf-8", errors="replace"))
+
+            for raw_line in text.splitlines():
+                line = clean_line(raw_line)
+                if not line:
+                    continue
+
+                if "Try new model" in line:
+                    os.write(fd, b"2\r\n")
+                    os.write(fd, b"/status\r\n")
+                    status_deadline = dt.datetime.now().timestamp() + status_wait_seconds
+                    break
+
+                heading = HEADING_RE.match(line)
+                if heading:
+                    current_scope = heading.group("scope").strip()
+                    continue
+
+                parsed = parse_chunk(line, current_scope)
+                if parsed:
+                    status_found = True
+                    status_deadline = min(status_deadline, dt.datetime.now().timestamp() + 1.0)
+
+            if status_found:
                 break
 
-            heading = HEADING_RE.match(line)
-            if heading:
-                current_scope = heading.group("scope").strip()
-                continue
-
-            parsed = parse_chunk(line, current_scope)
-            if parsed:
-                status_found = True
-                status_deadline = min(status_deadline, dt.datetime.now().timestamp() + 1.0)
+        if status_found:
+            break
 
     os.write(fd, b"exit\r\n")
 
     end = dt.datetime.now().timestamp() + 2.0
     while dt.datetime.now().timestamp() < end:
         chunk = read_chunk(fd, end)
-        if chunk:
-            out.extend(chunk)
+        if not chunk:
+            continue
+        reply_to_terminal_queries(fd, chunk)
+        out.extend(chunk)
 
     try:
         os.kill(pid, signal.SIGTERM)
@@ -166,11 +205,15 @@ def capture_status(codex_cmd: str, init_seconds: float, status_wait_seconds: flo
     except OSError:
         pass
 
-    os.close(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
     return out.decode("utf-8", errors="replace")
 
 
-def parse_status(raw: str):
+def parse_status(raw: str) -> dict[str, object]:
     plain = strip_ansi(raw)
     lines = plain.splitlines()
 
@@ -249,171 +292,173 @@ def parse_status(raw: str):
     for scope_values in grouped.values():
         scope_values.sort(key=lambda item: item["window"])
 
-    parsed = {
+    return {
         "retrieved_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status_info": info,
         "limits_by_scope": grouped,
         "raw_lines": [clean_line(line) for line in lines if clean_line(line)],
     }
 
-    return parsed
+
+def build_contexts(codex_homes: Optional[list[str]]) -> list[dict[str, Optional[str]]]:
+    if not codex_homes:
+        return [{"context": None, "codex_home": None}]
+
+    contexts = []
+    for raw_path in codex_homes:
+        path = Path(raw_path).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError(f"--codex-home must point to a directory: {raw_path}")
+        if not (path / "auth.json").is_file():
+            raise ValueError(f"--codex-home is missing auth.json: {path}")
+
+        contexts.append({"context": str(path), "codex_home": str(path)})
+
+    return contexts
 
 
-def collect_status(
-    codex_cmd: str,
-    init_seconds: float,
-    status_wait_seconds: float,
-    include_raw: bool,
-) -> dict[str, object]:
-    raw = capture_status(codex_cmd, init_seconds, status_wait_seconds)
-    result = parse_status(raw)
+def format_pretty(snapshot: dict[str, object]) -> str:
+    retrieved_at = str(snapshot["retrieved_at"])
+    grouped = snapshot["limits_by_scope"]
+    parts = []
+    if snapshot.get("context") is not None:
+        parts.append(str(snapshot["context"]))
+    parts.append(retrieved_at)
 
-    if not include_raw:
-        result.pop("raw_lines", None)
-
-    return result
-
-
-def format_pretty(payload: dict[str, object]) -> str:
-    if "error" in payload:
-        return f"{payload['retrieved_at']} error={payload['error']}"
-
-    limit_scopes = payload.get("limits_by_scope", {})
     scope_names = []
-    if "global" in limit_scopes:
+    if "global" in grouped:
         scope_names.append("global")
+    scope_names.extend(sorted(name for name in grouped if name != "global"))
 
-    scope_names.extend(sorted(name for name in limit_scopes if name != "global"))
-
-    scope_parts = []
-    for scope_name in scope_names:
-        limits = limit_scopes.get(scope_name, [])
-        limit_parts = []
-        for limit in limits:
-            resets = limit.get("resets")
-            reset_suffix = f" reset={resets}" if resets else ""
-            limit_parts.append(
-                f"{limit['window']}={limit['percent_left']}%{reset_suffix}"
-            )
-
-        scope_parts.append(f"{scope_name}: " + ", ".join(limit_parts))
-
-    return " | ".join([payload["retrieved_at"], *scope_parts])
+    for scope in scope_names:
+        entries = grouped[scope]
+        rendered = ", ".join(
+            f"{entry['window']}={entry['percent_left']}% reset={entry['resets']}"
+            for entry in entries
+        )
+        parts.append(f"{scope}: {rendered}")
+    return " | ".join(parts)
 
 
-def emit_json(payload: dict[str, object], pretty: bool, ndjson: bool) -> None:
+def emit_snapshot(snapshot: dict[str, object], *, pretty: bool, ndjson: bool) -> None:
     if pretty:
-        print(format_pretty(payload), flush=True)
+        print(format_pretty(snapshot), flush=True)
         return
 
     if ndjson:
-        print(json.dumps(payload), flush=True)
+        print(json.dumps(snapshot, separators=(",", ":")), flush=True)
         return
 
-    print(json.dumps(payload), flush=True)
+    print(json.dumps(snapshot, indent=2), flush=True)
 
 
-def run_watch(
-    codex_cmd: str,
-    init_seconds: float,
-    status_wait_seconds: float,
-    include_raw: bool,
+def emit_snapshots(
+    snapshots: list[dict[str, object]],
+    *,
     pretty: bool,
     ndjson: bool,
-    interval_seconds: float,
-) -> int:
-    if interval_seconds <= 0:
-        raise ValueError("--watch must be greater than 0")
+    multiple: bool,
+) -> None:
+    if pretty or ndjson:
+        for snapshot in snapshots:
+            emit_snapshot(snapshot, pretty=pretty, ndjson=ndjson)
+        return
 
-    try:
-        while True:
-            payload = collect_status(
-                codex_cmd=codex_cmd,
-                init_seconds=init_seconds,
-                status_wait_seconds=status_wait_seconds,
-                include_raw=include_raw,
-            )
-            emit_json(payload, pretty, ndjson)
-            time.sleep(interval_seconds)
-    except KeyboardInterrupt:
-        return 0
+    if multiple:
+        print(json.dumps(snapshots, indent=2), flush=True)
+        return
+
+    emit_snapshot(snapshots[0], pretty=False, ndjson=False)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Fetch Codex usage limits from /status and return JSON."
-    )
-    parser.add_argument(
-        "--codex",
-        default="codex",
-        help="Path to codex executable. Defaults to `codex`.",
-    )
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--codex", default="codex", help="codex executable to launch")
     parser.add_argument(
         "--init-seconds",
         type=float,
-        default=2.0,
-        help="Time to let Codex boot before sending /status.",
+        default=2.5,
+        help="seconds to allow Codex to initialize before sending /status",
     )
     parser.add_argument(
         "--status-seconds",
         type=float,
-        default=24.0,
-        help="Time to wait for /status output after sending the command.",
+        default=10.0,
+        help="seconds to wait for the /status card after requesting it",
     )
     parser.add_argument(
         "--watch",
         type=float,
+        default=0.0,
         metavar="SECONDS",
-        help="Poll continuously and emit a JSON snapshot every N seconds.",
+        help="poll repeatedly every N seconds until interrupted",
     )
     parser.add_argument(
-        "--ndjson",
-        action="store_true",
-        help="Emit newline-delimited JSON objects. Useful with --watch.",
+        "--codex-home",
+        action="append",
+        metavar="DIR",
+        help="repeatable CODEX_HOME directory containing auth.json and optional config.toml",
     )
     parser.add_argument(
         "--pretty",
         action="store_true",
-        help="Emit a compact human-readable status line. Useful with --watch.",
+        help="emit compact human-readable summaries instead of JSON",
+    )
+    parser.add_argument(
+        "--ndjson",
+        action="store_true",
+        help="emit one compact JSON object per line",
     )
     parser.add_argument(
         "--no-raw",
         action="store_true",
-        help="Do not include the parsed raw text lines in output.",
+        help="omit raw parsed lines from the output payload",
     )
+    return parser
 
-    args = parser.parse_args()
-    if args.pretty and args.ndjson:
-        parser.error("--pretty and --ndjson cannot be used together")
 
-    try:
-        if args.watch is not None:
-            return run_watch(
-                codex_cmd=args.codex,
-                init_seconds=args.init_seconds,
-                status_wait_seconds=args.status_seconds,
-                include_raw=not args.no_raw,
-                pretty=args.pretty,
-                ndjson=args.ndjson,
-                interval_seconds=args.watch,
-            )
-
-        result = collect_status(
-            codex_cmd=args.codex,
-            init_seconds=args.init_seconds,
-            status_wait_seconds=args.status_seconds,
-            include_raw=not args.no_raw,
+def make_snapshot(args: argparse.Namespace, context: dict[str, Optional[str]]) -> dict[str, object]:
+    snapshot = parse_status(
+        capture_status(
+            args.codex,
+            args.init_seconds,
+            args.status_seconds,
+            codex_home=context["codex_home"],
         )
-        emit_json(result, args.pretty, args.ndjson)
+    )
+    if args.no_raw:
+        snapshot.pop("raw_lines", None)
+    if context["context"] is not None:
+        snapshot["context"] = context["context"]
+        snapshot["codex_home"] = context["codex_home"]
+    return snapshot
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if args.pretty and args.ndjson:
+        raise SystemExit("--pretty and --ndjson are mutually exclusive")
+    contexts = build_contexts(args.codex_home)
+
+    if args.watch <= 0:
+        snapshots = [make_snapshot(args, context) for context in contexts]
+        emit_snapshots(
+            snapshots,
+            pretty=args.pretty,
+            ndjson=args.ndjson,
+            multiple=len(contexts) > 1,
+        )
         return 0
 
-    except Exception as exc:
-        payload = {
-            "retrieved_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "error": str(exc),
-        }
-        emit_json(payload, args.pretty, args.ndjson)
-        return 1
+    while True:
+        snapshots = [make_snapshot(args, context) for context in contexts]
+        emit_snapshots(
+            snapshots,
+            pretty=args.pretty,
+            ndjson=args.ndjson,
+            multiple=len(contexts) > 1,
+        )
+        time.sleep(args.watch)
 
 
 if __name__ == "__main__":

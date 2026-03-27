@@ -14,6 +14,15 @@ Watch mode:
 python codex-usage/codex-usage.py --watch 60 --pretty --no-raw
 ```
 
+Multiple Codex accounts:
+
+```bash
+python codex-usage/codex-usage.py \
+  --codex-home ~/.codex-work \
+  --codex-home ~/.codex-personal \
+  --pretty --no-raw
+```
+
 NDJSON stream mode:
 
 ```bash
@@ -55,11 +64,22 @@ JSON output example (trimmed):
 }
 ```
 
+### Multiple Accounts
+
+When multiple `--codex-home` directories are provided, the output includes separate entries for each account. The `status_info.account` field indicates the account name and type (e.g., Pro, Free) for each snapshot.
+
+```shell
+python codex-usage/codex-usage.py --pretty --no-raw --watch 60 --codex-home ~/.codex --codex-home ~/.codex-private
+```
+
 ## Notes
 
 - Parses rendered terminal output from the interactive `codex` process.
 - Works well for non-interactive scheduled checks (cron/systemd timers).
+- `--codex-home DIR` is repeatable. Each directory should be a full `CODEX_HOME` containing at least `auth.json`.
 - `--watch N` emits one snapshot every `N` seconds until interrupted.
 - `--pretty` emits a compact single-line human-readable summary per snapshot.
 - `--ndjson` forces one compact JSON object per line.
+- Disables the `chrome-devtools` MCP server for polling runs by default.
+- Replies to Codex terminal capability/color probes inside the PTY to reduce automation startup latency.
 - It is intentionally light and independent: no extra dependencies.
