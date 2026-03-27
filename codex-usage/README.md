@@ -1,6 +1,6 @@
 # codex-usage
 
-Small utility to pull the Codex `/status` usage card without interactive work and emit JSON.
+Small utility to pull the Codex `/status` usage card without interactive work and emit JSON or compact text.
 
 ## Usage
 
@@ -11,7 +11,7 @@ python codex-usage/codex-usage.py --pretty
 Watch mode:
 
 ```bash
-python codex-usage/codex-usage.py --watch 60 --no-raw
+python codex-usage/codex-usage.py --watch 60 --pretty --no-raw
 ```
 
 NDJSON stream mode:
@@ -20,7 +20,13 @@ NDJSON stream mode:
 python codex-usage/codex-usage.py --watch 60 --ndjson --no-raw
 ```
 
-Example output (trimmed):
+Pretty output example:
+
+```text
+2026-03-27T10:00:00Z | global: 5h=100% reset=16:07, Weekly=100% reset=12:07 on 3 Apr | GPT-5.3-Codex-Spark: 5h=97% reset=16:08, Weekly=98% reset=12:08 on 3 Apr
+```
+
+JSON output example (trimmed):
 
 ```json
 {
@@ -53,6 +59,7 @@ Example output (trimmed):
 
 - Parses rendered terminal output from the interactive `codex` process.
 - Works well for non-interactive scheduled checks (cron/systemd timers).
-- `--watch N` emits one JSON snapshot every `N` seconds until interrupted.
+- `--watch N` emits one snapshot every `N` seconds until interrupted.
+- `--pretty` emits a compact single-line human-readable summary per snapshot.
 - `--ndjson` forces one compact JSON object per line.
 - It is intentionally light and independent: no extra dependencies.

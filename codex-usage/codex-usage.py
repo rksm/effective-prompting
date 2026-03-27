@@ -274,12 +274,43 @@ def collect_status(
     return result
 
 
+def format_pretty(payload: dict[str, object]) -> str:
+    if "error" in payload:
+        return f"{payload['retrieved_at']} error={payload['error']}"
+
+    limit_scopes = payload.get("limits_by_scope", {})
+    scope_names = []
+    if "global" in limit_scopes:
+        scope_names.append("global")
+
+    scope_names.extend(sorted(name for name in limit_scopes if name != "global"))
+
+    scope_parts = []
+    for scope_name in scope_names:
+        limits = limit_scopes.get(scope_name, [])
+        limit_parts = []
+        for limit in limits:
+            resets = limit.get("resets")
+            reset_suffix = f" reset={resets}" if resets else ""
+            limit_parts.append(
+                f"{limit['window']}={limit['percent_left']}%{reset_suffix}"
+            )
+
+        scope_parts.append(f"{scope_name}: " + ", ".join(limit_parts))
+
+    return " | ".join([payload["retrieved_at"], *scope_parts])
+
+
 def emit_json(payload: dict[str, object], pretty: bool, ndjson: bool) -> None:
+    if pretty:
+        print(format_pretty(payload), flush=True)
+        return
+
     if ndjson:
         print(json.dumps(payload), flush=True)
         return
 
-    print(json.dumps(payload, indent=2 if pretty else None), flush=True)
+    print(json.dumps(payload), flush=True)
 
 
 def run_watch(
@@ -340,7 +371,11 @@ def main() -> int:
         action="store_true",
         help="Emit newline-delimited JSON objects. Useful with --watch.",
     )
-    parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Emit a compact human-readable status line. Useful with --watch.",
+    )
     parser.add_argument(
         "--no-raw",
         action="store_true",
@@ -348,6 +383,8 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    if args.pretty and args.ndjson:
+        parser.error("--pretty and --ndjson cannot be used together")
 
     try:
         if args.watch is not None:
