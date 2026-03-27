@@ -12,6 +12,7 @@ import select
 import signal
 import struct
 import termios
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -145,7 +146,7 @@ def capture_status(codex_cmd: str, init_seconds: float, status_wait_seconds: flo
             parsed = parse_chunk(line, current_scope)
             if parsed:
                 status_found = True
-                status_deadline = max(status_deadline, dt.datetime.now().timestamp() + 1.0)
+                status_deadline = min(status_deadline, dt.datetime.now().timestamp() + 1.0)
 
     os.write(fd, b"exit\r\n")
 
@@ -258,6 +259,50 @@ def parse_status(raw: str):
     return parsed
 
 
+def collect_status(
+    codex_cmd: str,
+    init_seconds: float,
+    status_wait_seconds: float,
+    include_raw: bool,
+) -> dict[str, object]:
+    raw = capture_status(codex_cmd, init_seconds, status_wait_seconds)
+    result = parse_status(raw)
+
+    if not include_raw:
+        result.pop("raw_lines", None)
+
+    return result
+
+
+def emit_json(payload: dict[str, object], pretty: bool) -> None:
+    print(json.dumps(payload, indent=2 if pretty else None), flush=True)
+
+
+def run_watch(
+    codex_cmd: str,
+    init_seconds: float,
+    status_wait_seconds: float,
+    include_raw: bool,
+    pretty: bool,
+    interval_seconds: float,
+) -> int:
+    if interval_seconds <= 0:
+        raise ValueError("--watch must be greater than 0")
+
+    try:
+        while True:
+            payload = collect_status(
+                codex_cmd=codex_cmd,
+                init_seconds=init_seconds,
+                status_wait_seconds=status_wait_seconds,
+                include_raw=include_raw,
+            )
+            emit_json(payload, pretty)
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fetch Codex usage limits from /status and return JSON."
@@ -279,6 +324,12 @@ def main() -> int:
         default=24.0,
         help="Time to wait for /status output after sending the command.",
     )
+    parser.add_argument(
+        "--watch",
+        type=float,
+        metavar="SECONDS",
+        help="Poll continuously and emit a JSON snapshot every N seconds.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     parser.add_argument(
         "--no-raw",
@@ -289,13 +340,23 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        raw = capture_status(args.codex, args.init_seconds, args.status_seconds)
-        result = parse_status(raw)
+        if args.watch is not None:
+            return run_watch(
+                codex_cmd=args.codex,
+                init_seconds=args.init_seconds,
+                status_wait_seconds=args.status_seconds,
+                include_raw=not args.no_raw,
+                pretty=args.pretty,
+                interval_seconds=args.watch,
+            )
 
-        if args.no_raw:
-            result.pop("raw_lines", None)
-
-        print(json.dumps(result, indent=2 if args.pretty else None))
+        result = collect_status(
+            codex_cmd=args.codex,
+            init_seconds=args.init_seconds,
+            status_wait_seconds=args.status_seconds,
+            include_raw=not args.no_raw,
+        )
+        emit_json(result, args.pretty)
         return 0
 
     except Exception as exc:
@@ -303,7 +364,7 @@ def main() -> int:
             "retrieved_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "error": str(exc),
         }
-        print(json.dumps(payload, indent=2 if args.pretty else None))
+        emit_json(payload, args.pretty)
         return 1
 
 

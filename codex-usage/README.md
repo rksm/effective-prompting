@@ -8,6 +8,12 @@ Small utility to pull the Codex `/status` usage card without interactive work an
 python codex-usage/codex-usage.py --pretty
 ```
 
+Watch mode:
+
+```bash
+python codex-usage/codex-usage.py --watch 60 --no-raw
+```
+
 Example output (trimmed):
 
 ```json
@@ -41,4 +47,5 @@ Example output (trimmed):
 
 - Parses rendered terminal output from the interactive `codex` process.
 - Works well for non-interactive scheduled checks (cron/systemd timers).
+- `--watch N` emits one JSON snapshot every `N` seconds until interrupted.
 - It is intentionally light and independent: no extra dependencies.
