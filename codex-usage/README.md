@@ -14,6 +14,12 @@ Watch mode:
 python codex-usage/codex-usage.py --watch 60 --no-raw
 ```
 
+NDJSON stream mode:
+
+```bash
+python codex-usage/codex-usage.py --watch 60 --ndjson --no-raw
+```
+
 Example output (trimmed):
 
 ```json
@@ -48,4 +54,5 @@ Example output (trimmed):
 - Parses rendered terminal output from the interactive `codex` process.
 - Works well for non-interactive scheduled checks (cron/systemd timers).
 - `--watch N` emits one JSON snapshot every `N` seconds until interrupted.
+- `--ndjson` forces one compact JSON object per line.
 - It is intentionally light and independent: no extra dependencies.

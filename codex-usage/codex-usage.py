@@ -274,7 +274,11 @@ def collect_status(
     return result
 
 
-def emit_json(payload: dict[str, object], pretty: bool) -> None:
+def emit_json(payload: dict[str, object], pretty: bool, ndjson: bool) -> None:
+    if ndjson:
+        print(json.dumps(payload), flush=True)
+        return
+
     print(json.dumps(payload, indent=2 if pretty else None), flush=True)
 
 
@@ -284,6 +288,7 @@ def run_watch(
     status_wait_seconds: float,
     include_raw: bool,
     pretty: bool,
+    ndjson: bool,
     interval_seconds: float,
 ) -> int:
     if interval_seconds <= 0:
@@ -297,7 +302,7 @@ def run_watch(
                 status_wait_seconds=status_wait_seconds,
                 include_raw=include_raw,
             )
-            emit_json(payload, pretty)
+            emit_json(payload, pretty, ndjson)
             time.sleep(interval_seconds)
     except KeyboardInterrupt:
         return 0
@@ -330,6 +335,11 @@ def main() -> int:
         metavar="SECONDS",
         help="Poll continuously and emit a JSON snapshot every N seconds.",
     )
+    parser.add_argument(
+        "--ndjson",
+        action="store_true",
+        help="Emit newline-delimited JSON objects. Useful with --watch.",
+    )
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
     parser.add_argument(
         "--no-raw",
@@ -347,6 +357,7 @@ def main() -> int:
                 status_wait_seconds=args.status_seconds,
                 include_raw=not args.no_raw,
                 pretty=args.pretty,
+                ndjson=args.ndjson,
                 interval_seconds=args.watch,
             )
 
@@ -356,7 +367,7 @@ def main() -> int:
             status_wait_seconds=args.status_seconds,
             include_raw=not args.no_raw,
         )
-        emit_json(result, args.pretty)
+        emit_json(result, args.pretty, args.ndjson)
         return 0
 
     except Exception as exc:
@@ -364,7 +375,7 @@ def main() -> int:
             "retrieved_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "error": str(exc),
         }
-        emit_json(payload, args.pretty)
+        emit_json(payload, args.pretty, args.ndjson)
         return 1
 
 
